@@ -1,5 +1,3 @@
-// Szkielet serwera UDP/IPv4 używającego gniazdka bezpołączeniowego.
-
 #define _POSIX_C_SOURCE 200809L
 #include <stdbool.h>
 #include <stdio.h>
@@ -51,7 +49,7 @@ int main(void)
     bool keep_on_handling_clients = true;
     while (keep_on_handling_clients) {
 
-        unsigned char buf[1024];
+        unsigned char buf[2048];
         struct sockaddr_in clnt_addr;
         socklen_t clnt_addr_len;
 
@@ -64,16 +62,20 @@ int main(void)
         }
         printf("received %zi bytes\n", cnt);
         
-        buf[cnt] = '\0';
-        while (cnt > 0 && (buf[cnt - 1] == '\n' || buf[cnt - 1] == '\r')) {
+        ssize_t original_cnt = cnt;
+
+        while (cnt > 0 && (buf[cnt - 1] == '\n' || buf[cnt - 1] == '\r' || buf[cnt - 1] == '\0')) {
             cnt--;
-            buf[cnt] = '\0';
         }
 
+        buf[cnt] = '\0';
+
         bool format_error = false;
-        if (buf[0] == ' ' || buf[cnt - 1] == ' ') {
+        if (original_cnt > 1024) { //Serwer musi być w stanie przetwarzać zapytania mające 1024 bajty lub mniej, na większe może odpowiadać „ERROR”
             format_error = true;
-        } else {
+        } else if (cnt > 0 && (buf[0] == ' ' || buf[cnt - 1] == ' ')) {
+            format_error = true;
+        } else if (cnt > 0) {
             for (ssize_t i = 0; i < cnt - 1; i++) {
                 if (buf[i] == ' ' && buf[i + 1] == ' ') {
                     format_error = true;
@@ -84,12 +86,12 @@ int main(void)
         
         char response[50];
         if (format_error) {
-            snprintf(response, sizeof(response), "ERROR\n");
+            snprintf(response, sizeof(response), "ERROR");
         } else  {
-            char *words[100];
+            char *words[1000];
             int word_count = 0;
                 char *word = strtok((char *)buf, " ");
-                while (word != NULL && word_count < 100) {
+                while (word != NULL && word_count < 1000) {
                     words[word_count++] = word;
                     word = strtok(NULL, " ");
                 }
@@ -102,7 +104,7 @@ int main(void)
                 }
             }
 
-            snprintf(response, sizeof(response), "%d/%d\n", palindromeCounter, word_count);
+            snprintf(response, sizeof(response), "%d/%d", palindromeCounter, word_count);
         }
 
         cnt = sendto(sock, response, strlen(response), 0,
