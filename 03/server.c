@@ -64,8 +64,11 @@ int main(void)
         
         ssize_t original_cnt = cnt;
 
-        while (cnt > 0 && (buf[cnt - 1] == '\n' || buf[cnt - 1] == '\r' || buf[cnt - 1] == '\0')) {
+        if (cnt > 0 && (buf[cnt - 1] == '\n')) {
             cnt--;
+            if (cnt > 0 && buf[cnt - 1] == '\r') {
+                cnt--;
+            }
         }
 
         buf[cnt] = '\0';
@@ -73,11 +76,15 @@ int main(void)
         bool format_error = false;
         if (original_cnt > 1024) { //Serwer musi być w stanie przetwarzać zapytania mające 1024 bajty lub mniej, na większe może odpowiadać „ERROR”
             format_error = true;
-        } else if (cnt > 0 && (buf[0] == ' ' || buf[cnt - 1] == ' ')) {
+        } else if (cnt > 0 && (buf[0] == ' ' || buf[cnt - 1] == ' ' || !isalpha(buf[cnt - 1]))) {
             format_error = true;
         } else if (cnt > 0) {
             for (ssize_t i = 0; i < cnt - 1; i++) {
                 if (buf[i] == ' ' && buf[i + 1] == ' ') {
+                    format_error = true;
+                    break;
+                }
+                if (!isalpha(buf[i]) && buf[i] != ' ') {
                     format_error = true;
                     break;
                 }
