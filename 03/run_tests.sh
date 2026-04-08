@@ -2,7 +2,7 @@
 
 echo "Uruchamianie testów..."
 
-for i in {1..17}; do
+for i in {1..27}; do
     # Wysłanie danych do serwera i zapisanie wyniku
     python3 mini-udpcat.py 127.0.0.1 2020 < "tests/test${i}-dane.txt" > "tests/wynik-test${i}.txt"
     
