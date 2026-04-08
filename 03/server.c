@@ -123,14 +123,14 @@ bool isValidPalindrome(const char *str) {
 bool isFormatError(const unsigned char *buf, ssize_t cnt, size_t orginal_cnt) {
     if (orginal_cnt > 1024) { //Serwer musi być w stanie przetwarzać zapytania mające 1024 bajty lub mniej, na większe może odpowiadać „ERROR”
         return true;
-    } else if (cnt > 0 && (buf[0] == ' ' || buf[cnt - 1] == ' ' || !isalpha(buf[cnt - 1]))) {
+    } else if (cnt > 0 && (buf[0] == ' ' || buf[cnt - 1] == ' ' || buf[cnt - 1] > 127 || !isalpha(buf[cnt - 1]))) {
         return true;
     } else if (cnt > 0) {
         for (ssize_t i = 0; i < cnt - 1; i++) {
             if (buf[i] == ' ' && buf[i + 1] == ' ') {
                 return true;
             }
-            if (!isalpha(buf[i]) && buf[i] != ' ') {
+            if (buf[i] > 127 || (!isalpha(buf[i]) && buf[i] != ' ')) {
                 return true;
             }
         }
