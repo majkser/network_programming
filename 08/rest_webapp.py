@@ -14,6 +14,7 @@ przed jej uruchomieniem. Skrypt rest_webapp.sh pokazuje jak.
 plik_bazy = './osoby.sqlite'
 
 import re, sqlite3
+from urllib.parse import parse_qs
 
 class OsobyApp:
     def __init__(self, environment, start_response):
@@ -58,66 +59,171 @@ z komunikatem o jego wystąpieniu.
         self.content = s.encode('UTF-8')
 
     def route(self):
-        '''
-Pierwszą rzeczą, którą aplikacja musi zrobić po odebraniu zapytania, jest
-sprawdzenie nazwy metody HTTP oraz nazwy zasobu. Jest to konieczne aby się
-zorientować o co klient prosi i wywołać odpowiedni fragment kodu realizujący
-jego zlecenie. Jest to tzw. routing zapytania.
-
-W niniejszej aplikacji routing jest realizowany częściowo w tej metodzie,
-a częściowo w metodach handle_table() i handle_item().
-'''
-        if self.env['PATH_INFO'] == '/osoby':
-            self.handle_table()
+        path_info = self.env.get('PATH_INFO', '')
+        if path_info == '' or path_info == '/':
+            self.failure('404 Not Found')
             return
-        m = re.search('^/osoby/(?P<id>[0-9]+)$', self.env['PATH_INFO'])
-        if m is not None:
-            self.handle_item(m.group('id'))
+        if '//' in path_info:
+            self.failure('404 Not Found')
             return
-        self.failure('404 Not Found')
+        raw_segments = path_info.split('/')
+        path = [segment for segment in raw_segments if segment != '']
+        query_params = parse_qs(self.env['QUERY_STRING'])
+        if len(path) > 0:
+            domain = path[0]
+            if (domain == 'osoby' or domain == 'psy'):
+                if len(path) == 1:
+                    self.handle_table(domain)
+                    return
 
-    def handle_table(self):
-        '''
-Obsługa zapytań odnoszących się do tabeli "osoby" traktowanej jako całość.
-Można ją pobrać, albo można dodać do niej nowy wiersz.
-'''
+                if len(path) == 2:
+                    resource = path[1]
+                    
+                    if resource == 'search':
+                        if domain != 'osoby':
+                            self.failure('404 Not Found')
+                            return
+                        self.handle_search(domain, query_params)
+                        return
+                    elif re.match('^[0-9]+$', resource):
+                        self.handle_item(domain, resource)
+                        return
+            
+            self.failure('404 Not Found')
+
+    def handle_table(self, domain):
+
         if self.env['REQUEST_METHOD'] == 'GET':
-            colnames, rows = self.sql_select()
+            colnames, rows = self.sql_select(domain)
             self.send_rows(colnames, rows)
         elif self.env['REQUEST_METHOD'] == 'POST':
             colnames, vals = self.read_tsv()
-            q = 'INSERT INTO osoby (' + ', '.join(colnames) + ') VALUES ('
+            if not self.validate_payload(domain, colnames, vals):
+                return
+            if domain == 'psy':
+                if not self.validate_owner_id(colnames, vals):
+                    return
+            q = 'INSERT INTO ' + domain + ' (' + ', '.join(colnames) + ') VALUES ('
             q += ', '.join(['?' for v in vals]) + ')'
             id = self.sql_modify(q, vals)
-            colnames, rows = self.sql_select(id)
+            colnames, rows = self.sql_select(domain, ['id'], [id])
             self.send_rows(colnames, rows)
         else:
-            self.failure('501 Not Implemented')
+            self.failure('405 Method Not Allowed')
 
-    def handle_item(self, id):
-        '''
-Obsługa zapytań odnoszących się do konkretnego wiersza w tabeli "osoby".
-Można go pobrać, zmodyfikować, albo usunąć.
-'''
+    def handle_item(self, domain, id):
+
         if self.env['REQUEST_METHOD'] == 'GET':
-            colnames, rows = self.sql_select(id)
+            colnames, rows = self.sql_select(domain, ['id'], [id])
             if len(rows) == 0:
                 self.failure('404 Not Found')
             else:
                 self.send_rows(colnames, rows)
         elif self.env['REQUEST_METHOD'] == 'PUT':
             colnames, vals = self.read_tsv()
-            q = 'UPDATE osoby SET '
+            if not self.validate_payload(domain, colnames, vals, is_update=True):
+                return
+            if domain == 'psy':
+                if not self.validate_owner_id(colnames, vals):
+                    return
+            q = 'UPDATE ' + domain + ' SET '
             q += ', '.join([c + ' = ?' for c in colnames])
-            q += ' WHERE id = ' + str(id)
-            self.sql_modify(q, vals)
-            colnames, rows = self.sql_select(id)
+            q += ' WHERE id = ?'
+            self.sql_modify(q, vals + [id])
+            colnames, rows = self.sql_select(domain, ['id'], [id])
             self.send_rows(colnames, rows)
         elif self.env['REQUEST_METHOD'] == 'DELETE':
-            q = 'DELETE FROM osoby WHERE id = ' + str(id)
-            self.sql_modify(q)
+            if domain == 'osoby':
+                _, rows = self.sql_select('psy', ['wlasciciel_id'], [id])
+                if len(rows) > 0:
+                    self.failure('409 Conflict', 'Nie mozna usunac osoby, ktora jest wlascicielem psa')
+                    return
+            q = 'DELETE FROM ' + domain + ' WHERE id = ?'
+            self.sql_modify(q, [id])
         else:
             self.failure('501 Not Implemented')
+
+    def handle_search(self, domain, query_params: dict):
+        if self.env['REQUEST_METHOD'] == 'GET':
+            if 'imie' in query_params and 'nazwisko' in query_params:
+                imie = query_params['imie'][0]
+                nazwisko = query_params['nazwisko'][0]
+                colnames, rows = self.sql_select(domain, ['imie', 'nazwisko'], [imie, nazwisko])
+                self.send_rows(colnames, rows)
+            elif 'imie' in query_params:
+                imie = query_params['imie'][0]
+                colnames, rows = self.sql_select(domain, ['imie'], [imie])
+                self.send_rows(colnames, rows)
+            elif 'nazwisko' in query_params:
+                nazwisko = query_params['nazwisko'][0]
+                colnames, rows = self.sql_select(domain, ['nazwisko'], [nazwisko])
+                self.send_rows(colnames, rows)
+            else:
+                self.failure('400 Bad Request', 'Brak parametru "imie" lub "nazwisko" w zapytaniu')
+        else:
+            self.failure('405 Method Not Allowed')
+
+    def validate_owner_id(self, colnames, vals):
+        if 'wlasciciel_id' not in colnames:
+            return True
+        owner_index = colnames.index('wlasciciel_id')
+        owner_id = vals[owner_index].strip()
+        if owner_id == '':
+            return True
+        _, rows = self.sql_select('osoby', ['id'], [owner_id])
+        if len(rows) == 0:
+            self.failure('409 Conflict', 'Nie istnieje osoba o podanym "wlasciciel_id"')
+            return False
+        return True
+
+    def validate_payload(self, domain, colnames, vals, is_update=False):
+        if len(colnames) == 0 or len(vals) == 0 or len(colnames) != len(vals):
+            self.failure('400 Bad Request', 'Niepoprawny format danych TSV')
+            return False
+
+        allowed_columns = {
+            'osoby': ['imie', 'nazwisko', 'telefon', 'adres'],
+            'psy': ['imie', 'rasa', 'wlasciciel_id'],
+        }
+        required_columns = {
+            'osoby': ['imie', 'nazwisko'],
+            'psy': ['imie', 'rasa'],
+        }
+        if domain not in allowed_columns:
+            self.failure('400 Bad Request', 'Nieznana tabela')
+            return False
+
+        for col in colnames:
+            if col not in allowed_columns[domain]:
+                self.failure('400 Bad Request', 'Nieznana kolumna: ' + col)
+                return False
+
+        if not is_update:
+            for col in required_columns[domain]:
+                if col not in colnames:
+                    self.failure('400 Bad Request', 'Brak wymaganej kolumny: ' + col)
+                    return False
+
+        field_map = dict(zip(colnames, vals))
+
+        for col in required_columns[domain]:
+            if col in field_map and field_map[col].strip() == '':
+                self.failure('400 Bad Request', 'Pole "' + col + '" nie moze byc puste')
+                return False
+
+        if 'telefon' in field_map:
+            telefon = field_map['telefon'].strip()
+            if telefon != '' and not re.match(r'^\+?[0-9]{7,15}$', telefon):
+                self.failure('400 Bad Request', 'Niepoprawny format telefonu')
+                return False
+
+        if 'wlasciciel_id' in field_map:
+            owner_raw = field_map['wlasciciel_id'].strip()
+            if owner_raw != '' and not re.match('^[0-9]+$', owner_raw):
+                self.failure('400 Bad Request', 'Niepoprawny "wlasciciel_id"')
+                return False
+
+        return True
 
     def read_tsv(self):
         f = self.env['wsgi.input']
@@ -136,13 +242,23 @@ Można go pobrać, zmodyfikować, albo usunąć.
         self.headers = [ ('Content-Type',
                 'text/tab-separated-values; charset=UTF-8') ]
 
-    def sql_select(self, id = None):
+    def sql_select(self, domain, col: list = None, val: list = None):
         conn = sqlite3.connect(plik_bazy)
         crsr = conn.cursor()
-        query = 'SELECT * FROM osoby'
-        if id is not None:
-            query += ' WHERE id = ' + str(id)
-        crsr.execute(query)
+        query = 'SELECT * FROM ' + domain
+        params = []
+        if col is not None and val is not None:
+            for i in range(len(col)):
+                if i == 0:
+                    query += ' WHERE '
+                else:
+                    query += ' AND '
+                query += col[i] + ' = ?'
+                params.append(val[i])
+        if params:
+            crsr.execute(query, params)
+        else:
+            crsr.execute(query)
         colnames = [ d[0] for d in crsr.description ]
         rows = crsr.fetchall()
         crsr.close()
